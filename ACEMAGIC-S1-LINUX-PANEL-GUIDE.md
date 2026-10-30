@@ -26,7 +26,12 @@ test -d "$HOME/acemagic/s1panel" && echo "s1panel directory found"
 systemctl status s1panel --no-pager
 ```
 
-If your installation uses a different directory or service name, substitute those values throughout this guide.
+That location and service name are what you get from upstream's "New Install" steps if you clone the project into your home directory as `acemagic` and run `sudo ./install` from `acemagic/s1panel`. If your installation uses a different directory or service name, substitute those values throughout this guide.
+
+> [!NOTE]
+> **Snap installs are different.** If you installed `s1panel` from the Snap Store, the configuration and themes live in `/root/snap/s1panel/current/`, and upstream says to stop the snap (`sudo snap stop s1panel`) before editing those files manually. The paths and `systemctl` commands in this guide assume the git install. This guide hasn't been checked against the snap.
+
+You'll also need ImageMagick (for the background image) and `python3` (only to check your JSON).
 
 ## Values you are expected to customize
 
@@ -60,6 +65,8 @@ cp -a themes "backups/themes-$STAMP"
 ```
 
 Do not skip this step. It gives you a quick way to return to the last working display.
+
+Upstream also warns that upgrading (`git pull`) can overwrite your changes to `config.json` and the demo theme, so make a fresh backup before every upgrade too.
 
 ## 2. Create a custom theme folder
 
@@ -100,7 +107,7 @@ identify "$HOME/acemagic/s1panel/themes/my-panel/background.png"
 
 The reported dimensions should be `320x170`.
 
-If `convert` or `identify` is not found, install ImageMagick using your distribution's package manager. On some newer ImageMagick installations, the equivalent command starts with `magick`.
+If `convert` or `identify` is not found, install ImageMagick using your distribution's package manager. ImageMagick 7 replaces `convert` with `magick` (same options) and `identify` with `magick identify`; on some systems `convert` still works but prints a deprecation warning.
 
 ## 4. Create a static-image theme
 
@@ -115,7 +122,7 @@ Use the following starting point, replacing `YOUR_USERNAME` with the result of `
 ```json
 {
   "orientation": "landscape",
-  "refresh": "redraw",
+  "refresh": "update",
   "screens": [
     {
       "id": 1,
@@ -129,7 +136,14 @@ Use the following starting point, replacing `YOUR_USERNAME` with the result of `
 }
 ```
 
-The full path is intentional. It prevents confusion about which directory is used when the systemd service starts the application.
+What the fields do, according to the upstream source:
+
+- `orientation`: `landscape` or `portrait`. The theme sets the panel's orientation, overriding `portrait` in `config.json`.
+- `refresh`: how changes are sent to the LCD. `update` sends only the regions that changed; `redraw` resends the whole screen on every cycle, which upstream's own comments call the slowest mode. Both modes draw the full screen once at startup. Earlier versions of this guide used `redraw` here.
+- `duration`: how long the screen is shown before moving to the next, in milliseconds. `0` means it stays. Upstream keeps every screen up for at least 10 seconds.
+- `widgets`: must be present, even if it's empty.
+
+The full wallpaper path is intentional. The service resolves relative paths from its working directory, and it runs as root, so `$HOME` and `~` won't point at your home directory.
 
 Validate the JSON before continuing:
 
@@ -153,7 +167,22 @@ Find its `theme` setting and point it at your new theme:
 "theme": "themes/my-panel/theme.json"
 ```
 
-Only replace the existing value. Keep the surrounding JSON and its commas intact.
+Only replace the existing value. Keep the surrounding JSON and its commas intact. The path is relative to the `s1panel` directory.
+
+Optionally, add your theme to the `theme_list` array in the same file so the web editor's theme picker can find it:
+
+```json
+"theme_list": [
+   {
+      "name": "a simple demo portrait orientation",
+      "config": "themes/simple_demo/portrait_simple.json"
+   },
+   {
+      "name": "My Panel",
+      "config": "themes/my-panel/theme.json"
+   }
+]
+```
 
 Validate the main configuration:
 
@@ -175,25 +204,36 @@ The custom image should now appear on the front LCD.
 
 The exact widget editor and available widget properties can vary by `s1panel` version. Use the project's included web interface when possible instead of copying an unverified theme from another machine.
 
-Typical sensor sources include:
+Sensors and widgets are modules listed in `config.json`. At the time of writing, upstream ships these:
 
-- `clock`
-- `calendar`
-- `cpu_usage`
-- `cpu_temp`
-- `memory`
-- `space`
+| Sensors (`sensors/*.js`) | Widgets (`widgets/*.js`) |
+|---|---|
+| `clock`, `calendar` | `text` |
+| `cpu_usage`, `cpu_temp`, `cpu_power` | `custom_bar` |
+| `memory` | `line_chart`, `bar_chart`, `doughnut_chart` |
+| `space` (disk usage per mount point) | `image`, `iconify` |
+| `network` (per interface) | `weather_icon` |
+| `weather` | |
 
-Typical display widgets include:
+Check the `sensors` and `widgets` arrays in your own `config.json` for what your version has. Some sensors need setup: `cpu_temp` needs lm_sensors installed and configured; `network` needs your interface name (the upstream example uses `enp2s0`, which may not match your S1, so check with `ip link`); and `weather` and `iconify` fetch data from the internet.
 
-- text
-- custom bars
-- line charts
-- doughnut charts
-- bar charts
-- images
+### Keep the editor off your network
 
-If the editor is listening on port `8686`, open it locally at:
+The editor listens on whatever address the `listen` setting in `config.json` gives. **Check it before you use the editor.** The upstream README describes `localhost:8686` as the default, but the `config.json` shipped in the repository sets `"listen": "0.0.0.0:8686"`, which serves the editor to your whole network. The editor has no login, and it can change your configuration.
+
+To keep it local-only, set:
+
+```json
+"listen": "127.0.0.1:8686"
+```
+
+Then restart the service:
+
+```bash
+sudo systemctl restart s1panel
+```
+
+On the S1 itself, open:
 
 ```text
 http://127.0.0.1:8686
@@ -205,17 +245,11 @@ For an S1 without a keyboard or monitor, create an SSH tunnel from another compu
 ssh -L 8686:127.0.0.1:8686 YOUR_USERNAME@YOUR_ACEMAGIC_IP
 ```
 
-Keep that terminal open, then visit this address on the other computer:
-
-```text
-http://127.0.0.1:8686
-```
-
-This makes the editor available without exposing it to the entire network.
+Keep that terminal open and visit `http://127.0.0.1:8686` on the other computer. With `listen` set to `127.0.0.1`, the tunnel is the only way in from elsewhere.
 
 ### Suggested 320 × 170 layout
 
-Because the screen is small, use short labels and large, high-contrast values.
+Because the screen is small, use short labels and large, high-contrast values. These positions are a starting point for a landscape layout, not a tested theme. Each widget's position goes in its `rect` (`x`, `y`, `width`, `height`, in pixels from the top-left).
 
 | Area | Suggested position | Content |
 |---|---:|---|
@@ -232,14 +266,13 @@ Keep important text away from the extreme edges. Test readability on the physica
 
 The LCD receives image data over USB HID. Full-screen transfers are relatively slow, so faster is not always smoother.
 
-- Static background: update only when something changes.
-- Basic statistics: every 15–30 seconds is normally enough.
-- Clock: every 30–60 seconds, depending on whether seconds are displayed.
-- Animation: use changed regions when supported and drop late frames rather than building a queue.
+- Use `"refresh": "update"` in the theme so only changed widgets are sent. `redraw` resends the whole screen every cycle.
+- Each widget has its own `refresh` value, **in milliseconds**. The upstream demo uses `1000`. For basic statistics, 15–30 seconds (`15000`–`30000`) is plenty. For a clock, use 30–60 seconds unless it shows seconds.
+- Leave the device-level `poll`, `refresh` and `heartbeat` values in `config.json` alone unless you have a reason to change them.
 
 ## 7. Multiple dashboard screens
 
-Themes may contain multiple entries in the `screens` array. Each screen can use a different wallpaper, widgets, and duration. This can be useful for rotating between:
+Themes may contain multiple entries in the `screens` array. Each screen can use a different wallpaper, widgets, and `duration` (milliseconds, at least 10 seconds in practice). Recent upstream versions also let you turn off a screen with `"enabled": false` without deleting it. This can be useful for rotating between:
 
 1. a general overview;
 2. temperatures and resource use; and
@@ -261,9 +294,9 @@ journalctl -u s1panel -n 100 --no-pager
 Also confirm:
 
 - both JSON files pass `python3 -m json.tool`;
-- the wallpaper path contains the correct username;
+- the wallpaper path is absolute and contains the correct username;
 - the image is exactly 320 × 170;
-- the service account can read the theme and image; and
+- `config.json` points at the right theme file (a log line saying `failed to load` followed by the theme path means it couldn't read the theme); and
 - no second application is trying to control the LCD.
 
 ### The image is stretched or has empty borders
@@ -295,8 +328,8 @@ If necessary, point `config.json` back to the original theme and restart again.
 
 ## Credits and further reading
 
-Driver, installation, and project details are available from the upstream repository:
+`s1panel`, the LCD and LED protocol work, and the installation instructions are by the upstream project. It is licensed under GPL-3.0:
 
 - [tjaworski/AceMagic-S1-LED-TFT-Linux](https://github.com/tjaworski/AceMagic-S1-LED-TFT-Linux)
 
-Review the upstream documentation for installation instructions and any configuration changes introduced after this guide was written.
+This guide contains no upstream code. Field names and defaults were checked against upstream commit `c6491eb` (June 2026). Review the upstream documentation for installation instructions and any configuration changes introduced after that.
